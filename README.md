@@ -122,6 +122,7 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 | Feature | Description | Implementation Notes |
 |---------|-------------|---------------------|
 | **Extensions** | Support for loading Chrome extensions via `session.loadExtension()` | Use Electron's extension APIs to load .crx files or unpacked extensions |
+| **Command+Number** | Quick switch to bookmark | When doing `Command+1` you go to the first bookmark, when doing `Command+2`, you'll go to the second, and so on. |
 | **Spaces** | Separate workspaces for different contexts (work, personal, studying) | Tab grouping with isolated sessions and visual workspace indicators |
 | **Bookmarks** | Save, organize, and manage favorite websites | Persistent storage with folders, tags, and quick access toolbar |
 | **Split Screen** | View multiple tabs side-by-side in the same window | Dynamic webview layout with resizable panes |
