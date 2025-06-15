@@ -4,7 +4,7 @@
 
 ![Dark browser screenshot](docs/screenshot.png)
 
-[See more screenshot here](/docs/screenshots)
+[See more screenshots here](/docs/screenshots)
 
 Dark is a sleek, Electron-based browser you can bend, hack and make your own, 100% React + TypeScript under the hood. Built on Chromium (so you still get Chrome DevTools and ecosystem compatibility), Dark makes browser customization as easy as editing a React component.
 
