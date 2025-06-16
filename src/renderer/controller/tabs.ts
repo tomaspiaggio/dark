@@ -25,7 +25,7 @@ export function openTabSearch(query: string) {
 }
 
 export function openTabAi(query: string) {
-    const searchUrl = `https://chatgpt.com/?q=${
+    const searchUrl = `https://t3.chat/new?model=gemini-2.0-flash&q=${
         encodeURIComponent(query)
     }`;
 
