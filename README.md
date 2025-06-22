@@ -144,17 +144,17 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 | **Packaging & Release** | Build system for distributing the browser | Electron Builder setup for macOS, Windows, and Linux packages |
 | **AI Features (Cmd+I)** | Cursor-style AI integration with user's API key | LLM integration for page summaries, Q&A, and content assistance |
 
-## ✅ Completed Features
+## ✅ Completed Features and Bugs
 
 - [x] **Copy/Paste Menu** - Edit menu items that target the active tab
 - [x] **Persistent State** - Settings and sessions are saved between launches  
 - [x] **Sidebar Toggle** - Collapsible sidebar for more screen space
 - [x] **Find in Page (Cmd+F)** - Search text within the current page
 - [x] **New Tab** - Create new tabs with keyboard shortcuts
+- [x] when changing tabs, the new size of the view should be the size of the window
+- [x] when closing sidebar there's a white strip
 
 # Bugs
 
-- [ ] when changing tabs, the new size of the view should be the size of the window
 - [ ] switcher on control+tab+tab doesn't close automatically, need to do enter
-- [ ] when closing sidebar there's a white strip
 - [ ] title changes on the frontend but is not actually stored or returned

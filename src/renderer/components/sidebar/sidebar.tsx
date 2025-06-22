@@ -255,7 +255,17 @@ function SortableTabItem({
             className="h-6 p-0 bg-transparent border-none focus-visible:ring-0 focus-visible:ring-offset-0 flex-grow"
           />
         )
-        : <span className="flex-grow truncate">{item.title}</span>}
+        : <span 
+            className="flex-grow truncate" 
+            onMouseDown={(e) => {
+              if (e.button === 1) { // Middle click
+                e.preventDefault();
+                handleCloseClick(e);
+              }
+            }}
+          >
+            {item.title}
+          </span>}
       <Button
         variant="ghost"
         size="icon"

@@ -22,6 +22,7 @@ import { autoUpdater } from "electron-updater";
 import path from "path";
 import { resolveHtmlPath } from "./util";
 import { DataStore } from "./controller/store";
+import contextMenu from 'electron-context-menu';
 
 class AppUpdater {
   constructor() {
@@ -260,18 +261,29 @@ const toggleSidebar = () => {
   setImmediate(loop);
 };
 
-// Update the createTabView function to include extensions configuration
+// Add helper function to get current window dimensions
+const getCurrentWindowSize = (): { width: number; height: number } => {
+  if (!baseWindow) {
+    return { width: INITIAL_WIDTH, height: INITIAL_HEIGHT };
+  }
+  const [width, height] = baseWindow.getSize();
+  return { width, height };
+};
+
+// Update the createTabView function to use current window size
 const createTabView = (url?: string): { id: string; view: WebContentsView } => {
   const id = generateTabId();
   const view = new WebContentsView();
   view.webContents.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   const sidebarWidth = getCurrentSidebarWidth();
+  const { width, height } = getCurrentWindowSize();
+  
   view.setBounds({
     x: sidebarWidth,
     y: 0,
-    width: INITIAL_WIDTH - sidebarWidth,
-    height: INITIAL_HEIGHT,
+    width: width - sidebarWidth,
+    height: height,
   });
 
   // Create tab data entry with history
@@ -284,6 +296,83 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
     historyIndex: 0,
   };
   tabsData.set(id, tabData);
+
+  // Set up context menu for this tab
+  contextMenu({
+    window: view.webContents,
+    showInspectElement: true,
+    showCopyImageAddress: true,
+    showSaveImageAs: true,
+    prepend: (defaultActions, params) => [
+      {
+        label: `Search Google for "${params.selectionText}"`,
+        visible: params.selectionText && params.selectionText.trim().length > 0,
+        click: () => {
+          shell.openExternal(
+            `https://www.google.com/search?q=${encodeURIComponent(params.selectionText.trim())}`
+          );
+        }
+      },
+      {
+        label: `Open "${params.linkURL}" in New Tab`,
+        visible: !!params.linkURL,
+        click: () => {
+          const { id: newTabId } = createTabView(params.linkURL);
+          switchToTab(newTabId);
+          sendTabsUpdate();
+        }
+      },
+      {
+        label: 'Copy Link Address',
+        visible: !!params.linkURL,
+        click: () => {
+          require('electron').clipboard.writeText(params.linkURL);
+        }
+      },
+      {
+        type: 'separator',
+        visible: (params.selectionText && params.selectionText.trim().length > 0) || !!params.linkURL
+      },
+      {
+        label: 'Back',
+        enabled: view.webContents.navigationHistory.canGoBack(),
+        click: () => {
+          view.webContents.navigationHistory.goBack();
+        }
+      },
+      {
+        label: 'Forward',
+        enabled: view.webContents.navigationHistory.canGoForward(),  
+        click: () => {
+          view.webContents.navigationHistory.goForward();
+        }
+      },
+      {
+        label: 'Reload',
+        click: () => {
+          view.webContents.reload();
+        }
+      },
+      {
+        type: 'separator'
+      }
+    ],
+    append: (defaultActions, params) => [
+      {
+        type: 'separator'
+      },
+      {
+        label: 'View Page Source',
+        click: () => {
+          // Create a new tab with view-source: prefix
+          const sourceUrl = `view-source:${view.webContents.getURL()}`;
+          const { id: newTabId } = createTabView(sourceUrl);
+          switchToTab(newTabId);
+          sendTabsUpdate();
+        }
+      }
+    ]
+  });
 
   // Helper function to check if URL is Chrome Web Store
   const isChromeWebStore = (url: string): boolean => {
@@ -509,7 +598,7 @@ const cleanupOldThumbnails = () => {
   });
 };
 
-// Helper function to switch to a specific tab
+// Update switchToTab to ensure proper sizing
 const switchToTab = async (tabId: string) => {
   if (!tabViews.has(tabId)) return;
 
@@ -548,9 +637,20 @@ const switchToTab = async (tabId: string) => {
     currentTab?.setVisible(false);
   }
 
-  // Show the new active tab
+  // Show the new active tab and ensure it's properly sized
   const newTab = tabViews.get(tabId);
   if (newTab) {
+    // Update bounds to match current window size before showing
+    const sidebarWidth = getCurrentSidebarWidth();
+    const { width, height } = getCurrentWindowSize();
+    
+    newTab.setBounds({
+      x: sidebarWidth,
+      y: 0,
+      width: width - sidebarWidth,
+      height: height,
+    });
+    
     newTab.setVisible(true);
     activeTabId = tabId;
   }
@@ -982,6 +1082,46 @@ const createWindow = async () => {
               showTabSwitcher();
             } else {
               navigateSwitcher("prev");
+            }
+          },
+        },
+        {
+          label: "Back",
+          accelerator: "CommandOrControl+Left",
+          click: () => {
+            const activeTab = getActiveTabView();
+            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoBack()) {
+              activeTab.webContents.navigationHistory.goBack();
+            }
+          },
+        },
+        {
+          label: "Back",
+          accelerator: "CommandOrControl+[",
+          click: () => {
+            const activeTab = getActiveTabView();
+            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoBack()) {
+              activeTab.webContents.navigationHistory.goBack();
+            }
+          },
+        },
+        {
+          label: "Forward",
+          accelerator: "CommandOrControl+Right",
+          click: () => {
+            const activeTab = getActiveTabView();
+            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoForward()) {
+              activeTab.webContents.navigationHistory.goForward();
+            }
+          },
+        },
+        {
+          label: "Forward",
+          accelerator: "CommandOrControl+]",
+          click: () => {
+            const activeTab = getActiveTabView();
+            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoForward()) {
+              activeTab.webContents.navigationHistory.goForward();
             }
           },
         },
