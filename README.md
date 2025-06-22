@@ -158,3 +158,5 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 
 - [ ] switcher on control+tab+tab doesn't close automatically, need to do enter
 - [ ] title changes on the frontend but is not actually stored or returned
+- [ ] when a website doesn't exist it just goes to a blank screen
+- [ ] support websites starting on https:// or http://

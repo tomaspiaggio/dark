@@ -22,7 +22,8 @@ import { autoUpdater } from "electron-updater";
 import path from "path";
 import { resolveHtmlPath } from "./util";
 import { DataStore } from "./controller/store";
-import contextMenu from 'electron-context-menu';
+import contextMenu from "electron-context-menu";
+import "./controller/extensions";
 
 class AppUpdater {
   constructor() {
@@ -245,7 +246,7 @@ const toggleSidebar = () => {
           height: height,
         });
       });
-
+      
       // Set visibility after animation completes
       sidebarView?.setVisible(isSidebarOpen);
     } else {
@@ -274,11 +275,9 @@ const getCurrentWindowSize = (): { width: number; height: number } => {
 const createTabView = (url?: string): { id: string; view: WebContentsView } => {
   const id = generateTabId();
   const view = new WebContentsView();
-  view.webContents.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-
   const sidebarWidth = getCurrentSidebarWidth();
   const { width, height } = getCurrentWindowSize();
-  
+
   view.setBounds({
     x: sidebarWidth,
     y: 0,
@@ -309,9 +308,11 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
         visible: params.selectionText && params.selectionText.trim().length > 0,
         click: () => {
           shell.openExternal(
-            `https://www.google.com/search?q=${encodeURIComponent(params.selectionText.trim())}`
+            `https://www.google.com/search?q=${
+              encodeURIComponent(params.selectionText.trim())
+            }`,
           );
-        }
+        },
       },
       {
         label: `Open "${params.linkURL}" in New Tab`,
@@ -320,222 +321,65 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
           const { id: newTabId } = createTabView(params.linkURL);
           switchToTab(newTabId);
           sendTabsUpdate();
-        }
+        },
       },
       {
-        label: 'Copy Link Address',
+        label: "Copy Link Address",
         visible: !!params.linkURL,
         click: () => {
-          require('electron').clipboard.writeText(params.linkURL);
-        }
+          require("electron").clipboard.writeText(params.linkURL);
+        },
       },
       {
-        type: 'separator',
-        visible: (params.selectionText && params.selectionText.trim().length > 0) || !!params.linkURL
+        type: "separator",
+        visible:
+          (params.selectionText && params.selectionText.trim().length > 0) ||
+          !!params.linkURL,
       },
       {
-        label: 'Back',
+        label: "Back",
         enabled: view.webContents.navigationHistory.canGoBack(),
         click: () => {
           view.webContents.navigationHistory.goBack();
-        }
+        },
       },
       {
-        label: 'Forward',
-        enabled: view.webContents.navigationHistory.canGoForward(),  
+        label: "Forward",
+        enabled: view.webContents.navigationHistory.canGoForward(),
         click: () => {
           view.webContents.navigationHistory.goForward();
-        }
+        },
       },
       {
-        label: 'Reload',
+        label: "Reload",
         click: () => {
           view.webContents.reload();
-        }
+        },
       },
       {
-        type: 'separator'
-      }
+        type: "separator",
+      },
     ],
     append: (defaultActions, params) => [
       {
-        type: 'separator'
+        type: "separator",
       },
       {
-        label: 'View Page Source',
+        label: "View Page Source",
         click: () => {
           // Create a new tab with view-source: prefix
           const sourceUrl = `view-source:${view.webContents.getURL()}`;
           const { id: newTabId } = createTabView(sourceUrl);
           switchToTab(newTabId);
           sendTabsUpdate();
-        }
-      }
-    ]
-  });
-
-  // Helper function to check if URL is Chrome Web Store
-  const isChromeWebStore = (url: string): boolean => {
-    try {
-      const urlObj = new URL(url);
-      return urlObj.hostname === 'chromewebstore.google.com' || 
-             urlObj.hostname === 'chrome.google.com';
-    } catch {
-      return false;
-    }
-  };
-
-  // Inject browser fingerprinting avoidance and extensions API very early
-  view.webContents.on("did-start-loading", () => {
-    const currentUrl = view.webContents.getURL();
-    
-    // Always inject browser fingerprinting avoidance code
-    view.webContents.executeJavaScript(`
-      // Browser fingerprinting avoidance
-      (() => {
-        // 1) navigator.vendor / platform
-        Object.defineProperty(navigator, 'vendor', {
-          get: () => 'Google Inc.'
-        });
-        Object.defineProperty(navigator, 'platform', {
-          get: () => 'MacIntel'  // Using MacIntel since you're on macOS
-        });
-
-        // 2) window.chrome stub
-        window.chrome = window.chrome || {};
-        window.chrome.runtime = window.chrome.runtime || { 
-          onMessage: { addListener: () => {} } 
-        };
-
-        // 3) Fake plugins
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [
-            { name: 'Chrome PDF Plugin' }, 
-            { name: 'Chrome PDF Viewer' },
-            { name: 'Native Client' }
-          ]
-        });
-
-        // 4) UA Client Hints
-        if (navigator.userAgentData) {
-          navigator.userAgentData.brands = [
-            { brand: 'Chromium', version: '124' },
-            { brand: 'Google Chrome', version: '124' }
-          ];
-          navigator.userAgentData.mobile = false;
-        }
-      })();
-    `).catch(console.error);
-    
-    // Additionally inject Chrome Web Store API if on Chrome Web Store
-    if (isChromeWebStore(currentUrl)) {
-      console.log('Injecting Chrome webstore API for:', currentUrl);
-      
-      view.webContents.executeJavaScript(`
-        // Chrome webstore API for extension installation
-        (() => {
-          if (typeof window !== 'undefined') {
-            window.chrome = window.chrome || {};
-            window.chrome.webstore = window.chrome.webstore || {
-              install: async function(url, onSuccess, onFailure) {
-                try {
-                  console.log('Chrome webstore install called with:', url);
-                  // Send request to main process
-                  const result = await window.electron?.ipcRenderer.invoke('extensions.install', { url });
-                  console.log('Extension install result:', result);
-                  if (result && result.success) {
-                    if (onSuccess) onSuccess();
-                  } else {
-                    if (onFailure) onFailure(result?.error || 'Installation failed');
-                  }
-                } catch (error) {
-                  console.error('Extension install error:', error);
-                  if (onFailure) onFailure(error);
-                }
-              }
-            };
-            
-            console.log('Chrome webstore API injected');
-          }
-        })();
-      `).catch(console.error);
-    }
+        },
+      },
+    ],
   });
 
   // Also inject on URL changes (navigation)
   view.webContents.on("did-navigate", (event, navigationUrl) => {
     updateTabData(id, { url: navigationUrl });
-    
-    // Always inject browser fingerprinting avoidance code
-    view.webContents.executeJavaScript(`
-      // Browser fingerprinting avoidance
-      (() => {
-        // 1) navigator.vendor / platform
-        Object.defineProperty(navigator, 'vendor', {
-          get: () => 'Google Inc.'
-        });
-        Object.defineProperty(navigator, 'platform', {
-          get: () => 'MacIntel'
-        });
-
-        // 2) window.chrome stub
-        window.chrome = window.chrome || {};
-        window.chrome.runtime = window.chrome.runtime || { 
-          onMessage: { addListener: () => {} } 
-        };
-
-        // 3) Fake plugins
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [
-            { name: 'Chrome PDF Plugin' }, 
-            { name: 'Chrome PDF Viewer' },
-            { name: 'Native Client' }
-          ]
-        });
-
-        // 4) UA Client Hints
-        if (navigator.userAgentData) {
-          navigator.userAgentData.brands = [
-            { brand: 'Chromium', version: '124' },
-            { brand: 'Google Chrome', version: '124' }
-          ];
-          navigator.userAgentData.mobile = false;
-        }
-      })();
-    `).catch(console.error);
-    
-    // Additionally inject Chrome Web Store API if navigating to Chrome Web Store
-    if (isChromeWebStore(navigationUrl)) {
-      console.log('Re-injecting Chrome webstore API after navigation to:', navigationUrl);
-      
-      view.webContents.executeJavaScript(`
-        // Chrome webstore API for extension installation
-        (() => {
-          if (typeof window !== 'undefined' && !window.chrome?.webstore?.install) {
-            window.chrome = window.chrome || {};
-            window.chrome.webstore = window.chrome.webstore || {
-              install: async function(url, onSuccess, onFailure) {
-                try {
-                  console.log('Chrome webstore install called with:', url);
-                  const result = await window.electron?.ipcRenderer.invoke('extensions.install', { url });
-                  console.log('Extension install result:', result);
-                  if (result && result.success) {
-                    if (onSuccess) onSuccess();
-                  } else {
-                    if (onFailure) onFailure(result?.error || 'Installation failed');
-                  }
-                } catch (error) {
-                  console.error('Extension install error:', error);
-                  if (onFailure) onFailure(error);
-                }
-              }
-            };
-            
-            console.log('Chrome webstore API re-injected after navigation');
-          }
-        })();
-      `).catch(console.error);
-    }
   });
 
   if (url) {
@@ -643,14 +487,14 @@ const switchToTab = async (tabId: string) => {
     // Update bounds to match current window size before showing
     const sidebarWidth = getCurrentSidebarWidth();
     const { width, height } = getCurrentWindowSize();
-    
+
     newTab.setBounds({
       x: sidebarWidth,
       y: 0,
       width: width - sidebarWidth,
       height: height,
     });
-    
+
     newTab.setVisible(true);
     activeTabId = tabId;
   }
@@ -707,7 +551,7 @@ const sendTabsUpdate = () => {
 ipcMain.on("tabs.set", async (event, arg) => {
   console.log("setting tab to ", arg);
   const activeTab = getActiveTabView();
-  if (activeTab) {
+  if (activeTab != null) {
     activeTab.webContents.loadURL(fixRawUrl(arg));
   }
   const tabs = Array.from(tabViews.entries()).map(([id, view]) => ({
@@ -1090,7 +934,10 @@ const createWindow = async () => {
           accelerator: "CommandOrControl+Left",
           click: () => {
             const activeTab = getActiveTabView();
-            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoBack()) {
+            if (
+              activeTab?.webContents &&
+              activeTab.webContents.navigationHistory.canGoBack()
+            ) {
               activeTab.webContents.navigationHistory.goBack();
             }
           },
@@ -1100,7 +947,10 @@ const createWindow = async () => {
           accelerator: "CommandOrControl+[",
           click: () => {
             const activeTab = getActiveTabView();
-            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoBack()) {
+            if (
+              activeTab?.webContents &&
+              activeTab.webContents.navigationHistory.canGoBack()
+            ) {
               activeTab.webContents.navigationHistory.goBack();
             }
           },
@@ -1110,7 +960,10 @@ const createWindow = async () => {
           accelerator: "CommandOrControl+Right",
           click: () => {
             const activeTab = getActiveTabView();
-            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoForward()) {
+            if (
+              activeTab?.webContents &&
+              activeTab.webContents.navigationHistory.canGoForward()
+            ) {
               activeTab.webContents.navigationHistory.goForward();
             }
           },
@@ -1120,7 +973,10 @@ const createWindow = async () => {
           accelerator: "CommandOrControl+]",
           click: () => {
             const activeTab = getActiveTabView();
-            if (activeTab?.webContents && activeTab.webContents.navigationHistory.canGoForward()) {
+            if (
+              activeTab?.webContents &&
+              activeTab.webContents.navigationHistory.canGoForward()
+            ) {
               activeTab.webContents.navigationHistory.goForward();
             }
           },
@@ -1347,6 +1203,11 @@ const createWindow = async () => {
     //   y: 10,
     // },
     webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      webviewTag: true,
+      nodeIntegration: false,
+      webSecurity: true,
       partition: `persist:${activeSpace?.id}`,
       preload: app.isPackaged
         ? path.join(__dirname, "preload.js")
@@ -1765,22 +1626,22 @@ ipcMain.on("find-in-page.dismiss", async (event) => {
 
 ipcMain.on("extensions.install", async (event, { url }) => {
   console.log("Installing extension", url);
-// main.js
-// const { app, session, ipcMain } = require('electron');
-// const installExtension = require('electron-extension-installer');
+  // main.js
+  // const { app, session, ipcMain } = require('electron');
+  // const installExtension = require('electron-extension-installer');
 
-// ipcMain.handle('install-extension', async (event, installUrl) => {
-//   // you can parse out the ID from installUrl, or just hard-code it
-//   const extensionId = 'aapocclcgogkmnckokdopfmhonfmgoek';
+  // ipcMain.handle('install-extension', async (event, installUrl) => {
+  //   // you can parse out the ID from installUrl, or just hard-code it
+  //   const extensionId = 'aapocclcgogkmnckokdopfmhonfmgoek';
 
-//   try {
-//     const extensionPath = await installExtension(extensionId);
-//     await session.defaultSession.loadExtension(extensionPath);
-//     return { success: true, path: extensionPath };
-//   } catch (error) {
-//     console.error('Install failed:', error);
-//     return { success: false, error: error.message };
-//   }
-// });
+  //   try {
+  //     const extensionPath = await installExtension(extensionId);
+  //     await session.defaultSession.loadExtension(extensionPath);
+  //     return { success: true, path: extensionPath };
+  //   } catch (error) {
+  //     console.error('Install failed:', error);
+  //     return { success: false, error: error.message };
+  //   }
+  // });
   event.reply("extensions.install", { success: true });
 });
