@@ -246,7 +246,7 @@ const toggleSidebar = () => {
           height: height,
         });
       });
-      
+
       // Set visibility after animation completes
       sidebarView?.setVisible(isSidebarOpen);
     } else {
@@ -283,6 +283,60 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
     y: 0,
     width: width - sidebarWidth,
     height: height,
+  });
+
+  view.webContents.on("did-navigate-in-page", async () => {
+    const url = view.webContents.getURL();
+    console.log("did-navigate-in-page url", url);
+    const parsedUrl = new URL(url);
+    if (
+      parsedUrl.host !== "chromewebstore.google.com" ||
+      !parsedUrl.pathname.startsWith("/detail/")
+    ) return;
+
+    console.log("did-navigate-in-page url", url);
+    const extensionId = parsedUrl.pathname.split("/").pop();
+    if (extensionId == null) return;
+    console.log("extensionId", extensionId);
+    await view.webContents.executeJavaScript(`
+      window.darkExtensionId = "${extensionId}";
+      console.log("window.darkExtensionId", window.darkExtensionId);
+      console.log("document.querySelectorAll", document.querySelectorAll("button"));
+      setTimeout(() => {
+        console.log("document.querySelectorAll", document.querySelectorAll("button"));
+        const buttonElement = Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes("Add to Chrome"));
+        if (buttonElement == null) {
+          // TODO: handle this case with user message
+          console.error("Add to Chrome button not found");
+          return;
+        }
+        console.log("buttonElement", buttonElement);
+
+        buttonElement.disabled = false;
+        buttonElement.style.backgroundColor = "black";
+
+        const textElement = Array.from(buttonElement.querySelectorAll("*")).find(s => s.innerText.includes("Add to Chrome"));
+        if (textElement == null) {
+          // TODO: handle this case with user message
+          console.error("Add to Chrome text not found");
+          return;
+        }
+        console.log("textElement", textElement);
+
+        textElement.innerText = textElement.innerText.replace("Chrome", "Dark");
+        textElement.addEventListener("click", () => {
+          console.log("installing extension", "${extensionId}");
+          textElement.innerText = "Installing...";
+          textElement.disabled = true;
+          textElement.style.backgroundColor = "gray";
+          textElement.style.cursor = "not-allowed";
+          textElement.style.pointerEvents = "none";
+          textElement.style.opacity = "0.5";
+          textElement.style.transition = "all 0.3s ease";
+          window.electron.ipcRenderer.sendMessage("extensions.install", "${extensionId}");
+        });
+      }, 1000);
+    `);
   });
 
   // Create tab data entry with history
@@ -681,8 +735,6 @@ ipcMain.on("tabs.reorder", async (event, { tabId, newIndex }) => {
 
   event.reply("tabs.reorder", { tabId, newIndex });
 });
-
-// ... existing code ...
 
 ipcMain.on("tabs.switch", async (event, tabId) => {
   console.log("switching to tab", tabId);
