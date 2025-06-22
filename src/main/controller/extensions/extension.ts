@@ -1,0 +1,1 @@
+// Core extension metadata (getURL, lastError, getBackgroundPage).

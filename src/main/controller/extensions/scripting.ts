@@ -1,0 +1,1 @@
+// Programmatic script/CSS injection (MV3 equivalent of executeScript/insertCSS).

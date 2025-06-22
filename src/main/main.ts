@@ -23,7 +23,7 @@ import path from "path";
 import { resolveHtmlPath } from "./util";
 import { DataStore } from "./controller/store";
 import contextMenu from "electron-context-menu";
-import "./controller/extensions";
+import "./controller/extensions/management";
 
 class AppUpdater {
   constructor() {
@@ -298,18 +298,55 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
     const extensionId = parsedUrl.pathname.split("/").pop();
     if (extensionId == null) return;
     console.log("extensionId", extensionId);
+
+    const interval = setInterval(async () => {
+      // FIXME: this check is not correct. when the tab is closed, the interval keeps being called.
+      if (view.webContents.isDestroyed()) {
+        clearInterval(interval);
+        return;
+      }
+
+      const parsedUrl = new URL(url);
+      if (
+        parsedUrl.host !== "chromewebstore.google.com" ||
+        !parsedUrl.pathname.startsWith("/detail/")
+      ) {
+        clearInterval(interval);
+        return;
+      }
+
+      const shouldInstall = await view.webContents.executeJavaScript(`window.darkExtensionInstall`);
+      if (shouldInstall) {
+        console.log("need to install extension", extensionId);
+        await view.webContents.executeJavaScript(`
+          window.darkExtensionInstall = false;
+          window.darkExtensionId = "${extensionId}";
+        `);
+        clearInterval(interval);
+        return;
+      } else {
+        console.log("shouldInstall", shouldInstall);
+      }
+    }, 100);
+
+    // TODO: if the extension is already installed, "Uninstall" or "Remove from Dark" and the 
+    // message key `extensions.install` should be the opposite: `extensions.uninstall`
     await view.webContents.executeJavaScript(`
       window.darkExtensionId = "${extensionId}";
+      window.darkExtensionInstall = false;
       console.log("window.darkExtensionId", window.darkExtensionId);
       console.log("document.querySelectorAll", document.querySelectorAll("button"));
-      setTimeout(() => {
+      
+      const waitForButton = () => {
         console.log("document.querySelectorAll", document.querySelectorAll("button"));
         const buttonElement = Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes("Add to Chrome"));
+        
         if (buttonElement == null) {
-          // TODO: handle this case with user message
-          console.error("Add to Chrome button not found");
+          // Button not found yet, continue polling
+          requestAnimationFrame(waitForButton);
           return;
         }
+        
         console.log("buttonElement", buttonElement);
 
         buttonElement.disabled = false;
@@ -333,9 +370,12 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
           textElement.style.pointerEvents = "none";
           textElement.style.opacity = "0.5";
           textElement.style.transition = "all 0.3s ease";
-          window.electron.ipcRenderer.sendMessage("extensions.install", "${extensionId}");
+          window.darkExtensionInstall = true;
         });
-      }, 1000);
+      };
+      
+      // Start polling for the button
+      requestAnimationFrame(waitForButton);
     `);
   });
 
@@ -1528,10 +1568,6 @@ const createWindow = async () => {
   });
 };
 
-/**
- * Add event listeners...
- */
-
 app.on("window-all-closed", () => {
   // Remove globalShortcut cleanup since we're not using it
 
@@ -1671,29 +1707,7 @@ ipcMain.on("find-in-page.dismiss", async (event) => {
   console.log("Dismissing find");
 
   const activeTabView = getActiveTabView();
-  if (activeTabView) {
+  if (activeTabView != null) {
     activeTabView.webContents.stopFindInPage("clearSelection");
   }
-});
-
-ipcMain.on("extensions.install", async (event, { url }) => {
-  console.log("Installing extension", url);
-  // main.js
-  // const { app, session, ipcMain } = require('electron');
-  // const installExtension = require('electron-extension-installer');
-
-  // ipcMain.handle('install-extension', async (event, installUrl) => {
-  //   // you can parse out the ID from installUrl, or just hard-code it
-  //   const extensionId = 'aapocclcgogkmnckokdopfmhonfmgoek';
-
-  //   try {
-  //     const extensionPath = await installExtension(extensionId);
-  //     await session.defaultSession.loadExtension(extensionPath);
-  //     return { success: true, path: extensionPath };
-  //   } catch (error) {
-  //     console.error('Install failed:', error);
-  //     return { success: false, error: error.message };
-  //   }
-  // });
-  event.reply("extensions.install", { success: true });
 });
