@@ -41,8 +41,8 @@ export type TabData = {
   title: string;
   active: boolean;
   order: number;
-  customTitle?: string; // For user-renamed tabs
   historyIndex: number; // New: for tracking tab selection history
+  customTitle?: string; // For user-renamed tabs
   thumbnail?: string; // New: base64 screenshot for preview
 };
 
