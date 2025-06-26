@@ -16,20 +16,28 @@ export function openTab(url: string) {
     window.electron?.ipcRenderer.sendMessage("tabs.open", url);
 }
 
-export function openTabSearch(query: string) {
+export function openTabSearch(query: string, newTab: boolean = false) {
     const searchUrl = `https://www.google.com/search?q=${
         encodeURIComponent(query)
     }`;
 
-    openTab(searchUrl);
+    if (newTab) {
+        openTab(searchUrl);
+    } else {
+        setTab(searchUrl);
+    }
 }
 
-export function openTabAi(query: string) {
+export function openTabAi(query: string, newTab: boolean = false) {
     const searchUrl = `https://t3.chat/new?model=gemini-2.0-flash&q=${
         encodeURIComponent(query)
     }`;
 
-    openTab(searchUrl);
+    if (newTab) {
+        openTab(searchUrl);
+    } else {
+        setTab(searchUrl);
+    }
 }
 
 export function getAllTabs(): Promise<{url: string, id: string, title: string, active: boolean}[]> {

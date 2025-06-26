@@ -118,6 +118,7 @@
     "electron-log": "^5.3.2",
     "electron-store": "^10.1.0",
     "electron-updater": "^6.3.9",
+    "keytar": "^7.9.0",
     "lucide-react": "^0.515.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

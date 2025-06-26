@@ -1,6 +1,1 @@
 - [ ] context isolation (for security, not allowing frontend to do all stuff basically): https://chatgpt.com/share/68515d48-06a4-8010-84d8-5adac86fc6d6
-- [x] context menu
-- [x] middle button to close tabs
-- [x] command left to go back, command \[ to go back
-- [x] on new tab fix resolution
-- [ ] command+l to change the current tab

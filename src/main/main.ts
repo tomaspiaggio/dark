@@ -17,13 +17,13 @@ import {
   shell,
   WebContentsView,
 } from "electron";
+import contextMenu from "electron-context-menu";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
 import path from "path";
-import { resolveHtmlPath } from "./util";
-import { DataStore } from "./controller/store";
-import contextMenu from "electron-context-menu";
 import "./controller/extensions/management";
+import { DataStore } from "./controller/store";
+import { resolveHtmlPath } from "./util";
 
 class AppUpdater {
   constructor() {
@@ -34,7 +34,7 @@ class AppUpdater {
 }
 
 // Tab data structure with ordering and history
-type TabData = {
+export type TabData = {
   id: string;
   url: string;
   title: string;
@@ -594,6 +594,23 @@ const switchToTab = async (tabId: string) => {
   }
 };
 
+export class Manager {
+  initialSidebarWidth: number = INITIAL_SIDEBAR_WIDTH;
+  initialSidebarHeight: number = INITIAL_HEIGHT;
+
+  getActiveTabView(): WebContentsView | null {
+    return getActiveTabView();
+  }
+
+  getInitialSidebarWidth(): number {
+    return this.initialSidebarWidth;
+  }
+  
+  get tabViews(): Map<string, WebContentsView> {
+    return tabViews;
+  }
+}
+
 // Helper function to get the active tab view
 const getActiveTabView = (): WebContentsView | null => {
   if (!activeTabId || !tabViews.has(activeTabId)) return null;
@@ -601,7 +618,7 @@ const getActiveTabView = (): WebContentsView | null => {
 };
 
 // Function to toggle overlay visibility (needs to be accessible globally)
-let toggleOverlay: () => void;
+let toggleOverlay: (newTab: boolean) => Promise<void>;
 
 // Function to toggle find overlay visibility (add after toggleOverlay declaration)
 let toggleFind: () => void;
@@ -979,8 +996,15 @@ const createWindow = async () => {
         {
           label: "New Tab",
           accelerator: "CommandOrControl+T",
-          click: () => {
-            if (toggleOverlay) toggleOverlay();
+          click: async () => {
+            if (toggleOverlay) await toggleOverlay(true);
+          },
+        },
+        {
+          label: "Change Current Tab",
+          accelerator: "CommandOrControl+L",
+          click: async () => {
+            if (toggleOverlay) await toggleOverlay(false);
           },
         },
         {
@@ -1307,8 +1331,6 @@ const createWindow = async () => {
     },
   });
 
-  overlayWindow.loadURL(`${resolveHtmlPath("/change-tab")}`);
-
   // Create tab switcher window
   const switcherWidth = 800;
   const switcherHeight = 148;
@@ -1337,8 +1359,14 @@ const createWindow = async () => {
   // switcherWindow.show();
 
   // Function to toggle overlay visibility
-  toggleOverlay = () => {
+  toggleOverlay = async (newTab: boolean) => {
     if (!overlayWindow) return;
+    
+    if (newTab) {
+      await overlayWindow.loadURL(`${resolveHtmlPath("/change-tab")}`);
+    } else {
+      await overlayWindow.loadURL(`${resolveHtmlPath("/set-tab")}`);
+    }
 
     isOverlayVisible = !isOverlayVisible;
 
@@ -1426,7 +1454,7 @@ const createWindow = async () => {
   });
 
   ipcMain.on("spotlight.toggle", async (event, arg) => {
-    toggleOverlay();
+    await toggleOverlay(true);
     event.reply("spotlight.toggle", arg);
   });
 
