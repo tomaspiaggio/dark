@@ -125,11 +125,9 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 | **Command+Number** | Quick switch to bookmark | When doing `Command+1` you go to the first bookmark, when doing `Command+2`, you'll go to the second, and so on. |
 | **Split Screen** | View multiple tabs side-by-side in the same window | Dynamic webview layout with resizable panes |
 | **Spaces** | Separate workspaces for different contexts (work, personal, studying) | Tab grouping with isolated sessions and visual workspace indicators |
-| **Cmd+Shift+C Copy URL** | Quick keyboard shortcut to copy current page URL | Copy active tab's URL to clipboard without manual selection |
 | **Extensions** | Support for loading Chrome extensions via `session.loadExtension()` | Use Electron's extension APIs to load .crx files or unpacked extensions |
 | **Multiple Instances** | Run multiple browser windows/processes simultaneously | Separate Electron processes for isolated browsing sessions |
 | **Sleep Tabs** | Reduce memory usage by suspending inactive tabs | Unload tab content but preserve state for quick restoration |
-| **Context Menu** | Right-click menus for pages, tabs, and UI elements | Custom context menus with copy, paste, inspect, and browser actions |
 | **Quit Confirmation** | Ask before closing browser with Cmd+Q | Prevent accidental closure with "Are you sure?" dialog |
 | **Config Menu** | Settings/preferences interface | Persistent settings for new tab URL, tab cleanup timing, hotkeys |
 | **Landing Page** | Custom start page when opening browser | Branded homepage with quick actions and workspace selection |
@@ -142,6 +140,7 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 | **Service Workers** | Full support for Progressive Web Apps | Enable offline functionality and push notifications |
 | **Packaging & Release** | Build system for distributing the browser | Electron Builder setup for macOS, Windows, and Linux packages |
 | **AI Features (Cmd+I)** | Cursor-style AI integration with user's API key | LLM integration for page summaries, Q&A, and content assistance |
+| **Command+Shift+C Toast** | If a user does Command+Shift+C the url gets copied to clipboard. I want to show a toast when that happens so that the user knows that something happened. Also, when the user copies on the url, show the dialog that this is a feature. |
 
 ## ✅ Completed Features and Bugs
 
@@ -157,6 +156,7 @@ Building and maintaining a browser engine wrapper is no small feat, and your sup
 - [x] command left to go back, command \[ to go back
 - [x] on new tab fix resolution
 - [x] command+l to change the current tab
+- [x] **Cmd+Shift+C Copy URL** - Quick keyboard shortcut to copy current page URL | Copy active tab's URL to clipboard without manual selection
 
 # Bugs
 

@@ -16,6 +16,7 @@ import {
   Menu,
   shell,
   WebContentsView,
+  clipboard
 } from "electron";
 import contextMenu from "electron-context-menu";
 import log from "electron-log";
@@ -1005,6 +1006,16 @@ const createWindow = async () => {
           accelerator: "CommandOrControl+L",
           click: async () => {
             if (toggleOverlay) await toggleOverlay(false);
+          },
+        },
+        {
+          label: "Copy Current URL",
+          accelerator: "CommandOrControl+Shift+C",
+          click: async () => {
+            const activeTab = getActiveTabView();
+            if (activeTab?.webContents) {
+              clipboard.writeText(activeTab.webContents.getURL());
+            }
           },
         },
         {
