@@ -1,46 +1,87 @@
 // Right-click menu items (used by many productivity extensions).
-// TODO: need to implement all of these. none are supported by electron.
-// declare namespace chrome.contextMenus {
-//     interface OnClickData { menuItemId: string|number; linkUrl?: string; selectionText?: string; frameUrl?: string; pageUrl?: string; }
+import { Tab } from '@/types/tab';
+import { BrowserWindow, ipcMain, Menu, MenuItem, WebContents } from 'electron';
 
-//     function create(props: {
-//       id?: string|number; title: string; contexts?: string[]; documentUrlPatterns?: string[]; onclick?: (info: OnClickData, tab: chrome.tabs.Tab) => void
-//     }): string|number
-//     function update(id: string|number, updateProps: { title?: string; contexts?: string[]; visible?: boolean }): void
-//     function remove(id: string|number): void
-//     function removeAll(): void
+interface OnClickData {
+    menuItemId: string | number;
+    linkUrl?: string;
+    selectionText?: string;
+    frameUrl?: string;
+    pageUrl?: string;
+}
 
-//     const onClicked: chrome.events.Event<(info: OnClickData, tab: chrome.tabs.Tab) => void>
-//   }
+// This will hold the menu items created by extensions.
+const menuItems = new Map<string | number, MenuItem>();
+let contextMenu: Menu | null = null;
 
 export class ContextMenus {
-    constructor(
-        
-    ) {}
+    constructor() {
+        ipcMain.on('context-menu-show', (event, params) => {
+            this.buildAndShowMenu(event.sender, params);
+        });
+    }
+
+    private buildAndShowMenu(contents: WebContents, params: any) {
+        // Filter menuItems based on context (params.linkURL, etc.)
+        // and documentUrlPatterns. This is a simplified version.
+        const itemsToShow = Array.from(menuItems.values());
+
+        if (itemsToShow.length > 0) {
+            contextMenu = Menu.buildFromTemplate(itemsToShow);
+            const win = BrowserWindow.fromWebContents(contents);
+            if (win) {
+                contextMenu.popup({ window: win });
+            }
+        }
+    }
 
     create(props: {
         id?: string | number;
         title: string;
         contexts?: string[];
         documentUrlPatterns?: string[];
-        // TODO: implement this
-        // onclick?: (info: OnClickData, tab: chrome.tabs.Tab) => void;
+        onclick?: (info: OnClickData, tab: Tab) => void;
     }): string | number {
-        throw new Error("Not implemented");
+        const id = props.id || Math.random().toString(36).substr(2, 9);
+
+        const menuItem = new MenuItem({
+            id: id.toString(),
+            label: props.title,
+            click: (menuItem, browserWindow, event) => {
+                // The `event` object here is an Electron event, not the extension's onClickData.
+                // We need to construct the onClickData and find the tab.
+                // This is a complex part to get right.
+                if (props.onclick) {
+                    // props.onclick(onClickData, tab);
+                }
+                // Also need to emit the global onClicked event.
+            }
+        });
+
+        menuItems.set(id, menuItem);
+        return id;
     }
 
     update(
         id: string | number,
-        updateProps: { title?: string; contexts?: string[]; visible?: boolean },
+        updateProps: { title?: string; contexts?: string[]; visible?: boolean }
     ): void {
-        throw new Error("Not implemented");
+        const menuItem = menuItems.get(id);
+        if (menuItem) {
+            if (updateProps.title) {
+                menuItem.label = updateProps.title;
+            }
+            if (updateProps.visible !== undefined) {
+                menuItem.visible = updateProps.visible;
+            }
+        }
     }
 
     remove(id: string | number): void {
-        throw new Error("Not implemented");
+        menuItems.delete(id);
     }
 
     removeAll(): void {
-        throw new Error("Not implemented");
+        menuItems.clear();
     }
 }

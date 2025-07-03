@@ -48,6 +48,11 @@ const configuration: webpack.Configuration = {
     plugins: [new TsconfigPathsPlugins()],
   },
 
+  node: {
+    __dirname: false,
+    __filename: false,
+  },
+
   plugins: [new webpack.EnvironmentPlugin({ NODE_ENV: 'production' })],
 };
 

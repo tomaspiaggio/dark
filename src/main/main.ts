@@ -22,7 +22,7 @@ import contextMenu from "electron-context-menu";
 import log from "electron-log";
 import { autoUpdater } from "electron-updater";
 import path from "path";
-import "./controller/extensions/management";
+import { ExtensionService } from "./services/extension-service";
 import { DataStore } from "./controller/store";
 import { resolveHtmlPath } from "./util";
 
@@ -56,6 +56,9 @@ let isOverlayVisible = false;
 let tabCounter = 0;
 let historyCounter = 0; // New: for tracking tab selection order
 let isSidebarOpen = true; // New: track sidebar visibility state
+let extensionService: ExtensionService;
+const tabIdToNumericId = new Map<string, number>();
+let nextNumericTabId = 1;
 
 // Tab switcher state
 let switcherWindow: BrowserWindow | null = null;
@@ -275,6 +278,7 @@ const getCurrentWindowSize = (): { width: number; height: number } => {
 // Update the createTabView function to use current window size
 const createTabView = (url?: string): { id: string; view: WebContentsView } => {
   const id = generateTabId();
+  tabIdToNumericId.set(id, nextNumericTabId++);
   const view = new WebContentsView();
   const sidebarWidth = getCurrentSidebarWidth();
   const { width, height } = getCurrentWindowSize();
@@ -318,6 +322,9 @@ const createTabView = (url?: string): { id: string; view: WebContentsView } => {
 
       const shouldInstall = await view.webContents.executeJavaScript(`window.darkExtensionInstall`);
       if (shouldInstall) {
+        if (extensionService) {
+          await extensionService.install(extensionId);
+        }
         console.log("need to install extension", extensionId);
         await view.webContents.executeJavaScript(`
           window.darkExtensionInstall = false;
@@ -954,657 +961,756 @@ if (isDebug) {
 }
 
 const installExtensions = async () => {
-  const installer = require("electron-devtools-installer");
-  const forceDownload = !!process.env.UPGRADE_EXTENSIONS;
-  const extensions = ["REACT_DEVELOPER_TOOLS"];
-
-  return installer
-    .default(
-      extensions.map((name) => installer[name]),
-      forceDownload,
-    )
-    .catch(console.log);
+  const tabManager = {
+    createTab: async (url: string) => {
+        const { id } = createTabView(url);
+        switchToTab(id);
+        const tabData = tabsData.get(id);
+        if (!tabData) throw new Error('Could not find tab data for new tab');
+        return { ...tabData, id: tabIdToNumericId.get(id) || 0 };
+    },
+    removeTab: async (tabId: number) => {
+        const internalId = [...tabIdToNumericId.entries()].find(([, numId]) => numId === tabId)?.[0];
+        if (internalId) {
+            const tabView = tabViews.get(internalId);
+            if (tabView) {
+                baseWindow?.contentView.removeChildView(tabView);
+                tabViews.delete(internalId);
+                tabsData.delete(internalId);
+                tabIdToNumericId.delete(internalId);
+                sendTabsUpdate();
+            }
+        }
+    },
+    getTabById: async (tabId: number) => {
+        const internalId = [...tabIdToNumericId.entries()].find(([, numId]) => numId === tabId)?.[0];
+        if (internalId) {
+            const tabData = tabsData.get(internalId);
+            if (tabData) {
+                return { ...tabData, id: tabIdToNumericId.get(internalId) || 0 };
+            }
+        }
+        return undefined;
+    },
+    getCurrentTab: async () => {
+        if (activeTabId) {
+            const tabData = tabsData.get(activeTabId);
+            if (tabData) {
+                return { ...tabData, id: tabIdToNumericId.get(activeTabId) || 0 };
+            }
+        }
+        return undefined;
+    },
+    updateTab: async (tabId: number, options: { url?: string, muted?: boolean, active?: boolean }) => {
+        const internalId = [...tabIdToNumericId.entries()].find(([, numId]) => numId === tabId)?.[0];
+        if (internalId) {
+            if (options.active) {
+                switchToTab(internalId);
+            }
+            if (options.url) {
+                const tabView = tabViews.get(internalId);
+                tabView?.webContents.loadURL(options.url);
+            }
+            // `muted` is not implemented on a tab level in this app.
+            const tabData = tabsData.get(internalId);
+            if (tabData) {
+                const numericId = tabIdToNumericId.get(internalId) || 0;
+                const updatedTabData = { ...tabData, id: numericId };
+                if (options.url) {
+                    updatedTabData.url = options.url;
+                }
+                return updatedTabData;
+            }
+        }
+        throw new Error(`Tab with id ${tabId} not found`);
+    },
+    queryTabs: async (query: { active?: boolean, currentWindow?: boolean, url?: string | string[] }) => {
+        let results = Array.from(tabsData.values());
+        if (query.active) {
+            results = results.filter(t => t.active);
+        }
+        // currentWindow is assumed to be true always in this single-window app
+        if (query.url) {
+            const urls = Array.isArray(query.url) ? query.url : [query.url];
+            results = results.filter(t => {
+                // Simple string matching, can be improved with pattern matching
+                return urls.some(u => t.url.includes(u));
+            });
+        }
+        return results.map(t => {
+            const numericId = tabIdToNumericId.get(t.id) || 0;
+            return { ...t, id: numericId };
+        });
+    }
+  };
+  extensionService = new ExtensionService(
+    tabManager,
+    baseWindow as BrowserWindow
+  );
+  await extensionService.loadExtensions();
 };
 
 const createWindow = async () => {
-  if (isDebug) {
-    await installExtensions();
-  }
+  try {
+    console.log('Starting createWindow');
 
-  const RESOURCES_PATH = app.isPackaged
-    ? path.join(process.resourcesPath, "assets")
-    : path.join(__dirname, "../../assets");
+    const RESOURCES_PATH = app.isPackaged
+      ? path.join(process.resourcesPath, "assets")
+      : path.join(__dirname, "../../assets");
 
-  const getAssetPath = (...paths: string[]): string => {
-    return path.join(RESOURCES_PATH, ...paths);
-  };
+    const getAssetPath = (...paths: string[]): string => {
+      return path.join(RESOURCES_PATH, ...paths);
+    };
 
-  baseWindow = new BaseWindow({
-    show: false,
-    width: 1600,
-    height: 1000,
-    icon: getAssetPath("icon.png"),
-    frame: false,
-  });
-
-  baseWindow.setTitle("Dark");
-
-  // Set up application menu with all keyboard shortcuts
-  const template: Electron.MenuItemConstructorOptions[] = [
-    {
-      label: "Application",
-      submenu: [
-        {
-          label: "New Tab",
-          accelerator: "CommandOrControl+T",
-          click: async () => {
-            if (toggleOverlay) await toggleOverlay(true);
-          },
-        },
-        {
-          label: "Change Current Tab",
-          accelerator: "CommandOrControl+L",
-          click: async () => {
-            if (toggleOverlay) await toggleOverlay(false);
-          },
-        },
-        {
-          label: "Copy Current URL",
-          accelerator: "CommandOrControl+Shift+C",
-          click: async () => {
-            const activeTab = getActiveTabView();
-            if (activeTab?.webContents) {
-              clipboard.writeText(activeTab.webContents.getURL());
-            }
-          },
-        },
-        {
-          label: "Close Tab",
-          accelerator: "CommandOrControl+W",
-          click: () => {
-            closeActiveTab();
-          },
-        },
-        {
-          label: "Toggle Sidebar",
-          accelerator: "CommandOrControl+S",
-          click: () => {
-            toggleSidebar();
-          },
-        },
-        {
-          label: "Next Tab",
-          accelerator: "Control+Tab",
-          click: () => {
-            isControlPressed = true;
-            if (!isSwitcherVisible) {
-              showTabSwitcher();
-            } else {
-              navigateSwitcher("next");
-            }
-          },
-        },
-        {
-          label: "Previous Tab",
-          accelerator: "Control+Shift+Tab",
-          click: () => {
-            isControlPressed = true;
-            if (!isSwitcherVisible) {
-              showTabSwitcher();
-            } else {
-              navigateSwitcher("prev");
-            }
-          },
-        },
-        {
-          label: "Back",
-          accelerator: "CommandOrControl+Left",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (
-              activeTab?.webContents &&
-              activeTab.webContents.navigationHistory.canGoBack()
-            ) {
-              activeTab.webContents.navigationHistory.goBack();
-            }
-          },
-        },
-        {
-          label: "Back",
-          accelerator: "CommandOrControl+[",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (
-              activeTab?.webContents &&
-              activeTab.webContents.navigationHistory.canGoBack()
-            ) {
-              activeTab.webContents.navigationHistory.goBack();
-            }
-          },
-        },
-        {
-          label: "Forward",
-          accelerator: "CommandOrControl+Right",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (
-              activeTab?.webContents &&
-              activeTab.webContents.navigationHistory.canGoForward()
-            ) {
-              activeTab.webContents.navigationHistory.goForward();
-            }
-          },
-        },
-        {
-          label: "Forward",
-          accelerator: "CommandOrControl+]",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (
-              activeTab?.webContents &&
-              activeTab.webContents.navigationHistory.canGoForward()
-            ) {
-              activeTab.webContents.navigationHistory.goForward();
-            }
-          },
-        },
-        { type: "separator" },
-        {
-          label: "Quit",
-          accelerator: "CommandOrControl+Q",
-          click: () => {
-            app.quit();
-          },
-        },
-      ],
-    },
-    {
-      label: "File",
-      role: "fileMenu",
-    },
-    {
-      label: "Edit",
-      role: "editMenu",
-      submenu: [
-        {
-          role: "cut",
-        },
-        {
-          role: "copy",
-        },
-        {
-          role: "paste",
-        },
-        {
-          role: "selectAll",
-        },
-        {
-          role: "delete",
-        },
-        {
-          role: "undo",
-        },
-        {
-          role: "redo",
-        },
-        {
-          role: "pasteAndMatchStyle",
-        },
-        {
-          label: "Find in Page",
-          accelerator: "CommandOrControl+F",
-          click: () => {
-            if (toggleFind) toggleFind();
-          },
-        },
-      ],
-    },
-    {
-      label: "View",
-      role: "viewMenu",
-    },
-    {
-      label: "Window",
-      role: "windowMenu",
-    },
-    {
-      label: "Share",
-      role: "shareMenu",
-    },
-    {
-      label: "Help",
-      role: "help",
-    },
-    // {
-    //   label: "View",
-    //   submenu: [
-    //     { role: "toggleDevTools" },
-    //     { role: "zoom" },
-    //     { role: "resetZoom" },
-    //     { role: "zoomIn" },
-    //     { role: "zoomOut" },
-    //     { role: "togglefullscreen" },
-    //     { role: "window" },
-    //     { role: "minimize" },
-    //     { role: "close" },
-    //     { role: "hide" },
-    //     { role: "hideOthers" },
-    //     { role: "unhide" },
-    //     { role: "quit" },
-    //   ],
-    // },
-    {
-      label: "Tools",
-      submenu: [
-        { role: "toggleDevTools" },
-        {
-          label: "Open Dev Tools",
-          accelerator: "CommandOrControl+Option+I",
-          click: (item, focusedWindow, event) => {
-            const activeTab = getActiveTabView();
-            if (activeTab?.webContents) {
-              activeTab.webContents.toggleDevTools();
-            } else {
-              console.log("No active tab");
-            }
-          },
-        },
-        {
-          role: "reload",
-          accelerator: "CommandOrControl+R",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (activeTab?.webContents) {
-              activeTab.webContents.reload();
-            }
-          },
-        },
-        {
-          role: "forceReload",
-          accelerator: "CommandOrControl+Shift+R",
-          click: () => {
-            const activeTab = getActiveTabView();
-            if (activeTab?.webContents) {
-              activeTab.webContents.reloadIgnoringCache();
-            }
-          },
-        },
-        { role: "toggleSpellChecker" },
-        { role: "showSubstitutions" },
-        { role: "toggleSmartQuotes" },
-        { role: "toggleSmartDashes" },
-        { role: "toggleTextReplacement" },
-        { role: "startSpeaking" },
-        { role: "stopSpeaking" },
-      ],
-    },
-    {
-      label: "Help",
-      submenu: [
-        { role: "help" },
-        { role: "about" },
-        { role: "services" },
-      ],
-    },
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
-
-  sidebarView = new WebContentsView({
-    webPreferences: {
-      preload: app.isPackaged
-        ? path.join(__dirname, "preload.js")
-        : path.join(__dirname, "../../.erb/dll/preload.js"),
-    },
-  });
-
-  sidebarView.setBounds({
-    x: 0,
-    y: 0,
-    width: INITIAL_SIDEBAR_WIDTH,
-    height: INITIAL_HEIGHT,
-  });
-
-  sidebarView.webContents.loadURL(resolveHtmlPath("/"));
-  // Remove or comment out the automatic DevTools opening:
-  setTimeout(() => {
-    sidebarView?.webContents.openDevTools({
-      mode: "detach",
+    console.log('Creating base window...');
+    baseWindow = new BaseWindow({
+      show: false,
+      width: 1600,
+      height: 1000,
+      icon: getAssetPath("icon.png"),
+      frame: false,
     });
-  }, 1000);
+    console.log('Base window created.');
 
-  // Create initial tab instead of single mainView
-  const { id: initialTabId } = createTabView("https://google.com");
-  switchToTab(initialTabId);
+    if (isDebug) {
+      console.log('Installing extensions...');
+      await installExtensions();
+      console.log('Extensions installed.');
+    }
 
-  // Create modal overlay window instead of WebContentsView
-  const overlayWidth = 600;
-  const overlayHeight = 328;
+    baseWindow.setTitle("Dark");
 
-  const spaces = DataStore.getSpaces();
-  if (spaces.length === 0) {
-    const defaultSpace = DataStore.addSpace({
-      name: "default",
-      color: "#3b82f6",
+    // Set up application menu with all keyboard shortcuts
+    const template: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: "Application",
+        submenu: [
+          {
+            label: "New Tab",
+            accelerator: "CommandOrControl+T",
+            click: async () => {
+              if (toggleOverlay) await toggleOverlay(true);
+            },
+          },
+          {
+            label: "Change Current Tab",
+            accelerator: "CommandOrControl+L",
+            click: async () => {
+              if (toggleOverlay) await toggleOverlay(false);
+            },
+          },
+          {
+            label: "Copy Current URL",
+            accelerator: "CommandOrControl+Shift+C",
+            click: async () => {
+              const activeTab = getActiveTabView();
+              if (activeTab?.webContents) {
+                clipboard.writeText(activeTab.webContents.getURL());
+              }
+            },
+          },
+          {
+            label: "Close Tab",
+            accelerator: "CommandOrControl+W",
+            click: () => {
+              closeActiveTab();
+            },
+          },
+          {
+            label: "Toggle Sidebar",
+            accelerator: "CommandOrControl+S",
+            click: () => {
+              toggleSidebar();
+            },
+          },
+          {
+            label: "Next Tab",
+            accelerator: "Control+Tab",
+            click: () => {
+              isControlPressed = true;
+              if (!isSwitcherVisible) {
+                showTabSwitcher();
+              } else {
+                navigateSwitcher("next");
+              }
+            },
+          },
+          {
+            label: "Previous Tab",
+            accelerator: "Control+Shift+Tab",
+            click: () => {
+              isControlPressed = true;
+              if (!isSwitcherVisible) {
+                showTabSwitcher();
+              } else {
+                navigateSwitcher("prev");
+              }
+            },
+          },
+          {
+            label: "Back",
+            accelerator: "CommandOrControl+Left",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (
+                activeTab?.webContents &&
+                activeTab.webContents.navigationHistory.canGoBack()
+              ) {
+                activeTab.webContents.navigationHistory.goBack();
+              }
+            },
+          },
+          {
+            label: "Back",
+            accelerator: "CommandOrControl+[",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (
+                activeTab?.webContents &&
+                activeTab.webContents.navigationHistory.canGoBack()
+              ) {
+                activeTab.webContents.navigationHistory.goBack();
+              }
+            },
+          },
+          {
+            label: "Forward",
+            accelerator: "CommandOrControl+Right",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (
+                activeTab?.webContents &&
+                activeTab.webContents.navigationHistory.canGoForward()
+              ) {
+                activeTab.webContents.navigationHistory.goForward();
+              }
+            },
+          },
+          {
+            label: "Forward",
+            accelerator: "CommandOrControl+]",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (
+                activeTab?.webContents &&
+                activeTab.webContents.navigationHistory.canGoForward()
+              ) {
+                activeTab.webContents.navigationHistory.goForward();
+              }
+            },
+          },
+          { type: "separator" },
+          {
+            label: "Quit",
+            accelerator: "CommandOrControl+Q",
+            click: () => {
+              app.quit();
+            },
+          },
+        ],
+      },
+      {
+        label: "File",
+        role: "fileMenu",
+      },
+      {
+        label: "Edit",
+        role: "editMenu",
+        submenu: [
+          {
+            role: "cut",
+          },
+          {
+            role: "copy",
+          },
+          {
+            role: "paste",
+          },
+          {
+            role: "selectAll",
+          },
+          {
+            role: "delete",
+          },
+          {
+            role: "undo",
+          },
+          {
+            role: "redo",
+          },
+          {
+            role: "pasteAndMatchStyle",
+          },
+          {
+            label: "Find in Page",
+            accelerator: "CommandOrControl+F",
+            click: () => {
+              if (toggleFind) toggleFind();
+            },
+          },
+        ],
+      },
+      {
+        label: "View",
+        role: "viewMenu",
+      },
+      {
+        label: "Window",
+        role: "windowMenu",
+      },
+      {
+        label: "Share",
+        role: "shareMenu",
+      },
+      {
+        label: "Help",
+        role: "help",
+      },
+      // {
+      //   label: "View",
+      //   submenu: [
+      //     { role: "toggleDevTools" },
+      //     { role: "zoom" },
+      //     { role: "resetZoom" },
+      //     { role: "zoomIn" },
+      //     { role: "zoomOut" },
+      //     { role: "togglefullscreen" },
+      //     { role: "window" },
+      //     { role: "minimize" },
+      //     { role: "close" },
+      //     { role: "hide" },
+      //     { role: "hideOthers" },
+      //     { role: "unhide" },
+      //     { role: "quit" },
+      //   ],
+      // },
+      {
+        label: "Tools",
+        submenu: [
+          { role: "toggleDevTools" },
+          {
+            label: "Open Dev Tools",
+            accelerator: "CommandOrControl+Option+I",
+            click: (item, focusedWindow, event) => {
+              const activeTab = getActiveTabView();
+              if (activeTab?.webContents) {
+                activeTab.webContents.toggleDevTools();
+              } else {
+                console.log("No active tab");
+              }
+            },
+          },
+          {
+            role: "reload",
+            accelerator: "CommandOrControl+R",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (activeTab?.webContents) {
+                activeTab.webContents.reload();
+              }
+            },
+          },
+          {
+            role: "forceReload",
+            accelerator: "CommandOrControl+Shift+R",
+            click: () => {
+              const activeTab = getActiveTabView();
+              if (activeTab?.webContents) {
+                activeTab.webContents.reloadIgnoringCache();
+              }
+            },
+          },
+          { role: "toggleSpellChecker" },
+          { role: "showSubstitutions" },
+          { role: "toggleSmartQuotes" },
+          { role: "toggleSmartDashes" },
+          { role: "toggleTextReplacement" },
+          { role: "startSpeaking" },
+          { role: "stopSpeaking" },
+        ],
+      },
+      {
+        label: "Help",
+        submenu: [
+          { role: "help" },
+          { role: "about" },
+          { role: "services" },
+        ],
+      },
+    ];
+
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+
+    console.log('Creating sidebar view...');
+    sidebarView = new WebContentsView({
+      webPreferences: {
+        preload: app.isPackaged
+          ? path.join(__dirname, "preload.js")
+          : path.join(__dirname, "../../.erb/dll/preload.js"),
+      },
     });
-    DataStore.setActiveSpaceId(defaultSpace.id);
-  }
-  const activeSpaceId = DataStore.getActiveSpaceId();
-  const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+    console.log('Sidebar view created.');
 
-  console.log("activeSpace", activeSpace);
-
-  // const tabs = DataStore.getTabsForSpace(activeSpaceId);
-  // console.log("tabs", tabs);
-
-  // tabs.forEach((tab) => {
-  //   // TODO: support custom title
-  //   const { id, url, title, customTitle } = tab;
-  //   const tabView = createTabView(url);
-  //   tabViews.set(id, tabView.view);
-  //   baseWindow?.contentView.addChildView(tabView.view);
-  // });
-
-  // if (tabs.length === 0) {
-  //   // Create initial tab instead of single mainView
-  //   const { id: initialTabId } = createTabView(
-  //     "https://kzmo4l6a1wwtjqq6q0rw.lite.vusercontent.net/",
-  //   );
-  //   switchToTab(initialTabId);
-  // }
-
-  overlayWindow = new BrowserWindow({
-    parent: baseWindow,
-    modal: true,
-    show: false,
-    width: overlayWidth,
-    height: overlayHeight,
-    resizable: false,
-    frame: false,
-    transparent: true,
-    // TODO: add traffic lights
-    // titleBarStyle: 'hiddenInset',
-    // trafficLightPosition: {
-    //   x: 10,
-    //   y: 10,
-    // },
-    webPreferences: {
-      sandbox: true,
-      contextIsolation: true,
-      webviewTag: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      partition: `persist:${activeSpace?.id}`,
-      preload: app.isPackaged
-        ? path.join(__dirname, "preload.js")
-        : path.join(__dirname, "../../.erb/dll/preload.js"),
-    },
-  });
-
-  // Create tab switcher window
-  const switcherWidth = 800;
-  const switcherHeight = 148;
-
-  switcherWindow = new BrowserWindow({
-    parent: baseWindow,
-    modal: false,
-    show: false,
-    width: switcherWidth,
-    height: switcherHeight,
-    resizable: false,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    webPreferences: {
-      preload: app.isPackaged
-        ? path.join(__dirname, "preload.js")
-        : path.join(__dirname, "../../.erb/dll/preload.js"),
-    },
-  });
-
-  switcherWindow.loadURL(`${resolveHtmlPath("/switcher")}`);
-
-  baseWindow.contentView.addChildView(sidebarView);
-
-  // switcherWindow.show();
-
-  // Function to toggle overlay visibility
-  toggleOverlay = async (newTab: boolean) => {
-    if (!overlayWindow) return;
-    
-    if (newTab) {
-      await overlayWindow.loadURL(`${resolveHtmlPath("/change-tab")}`);
-    } else {
-      await overlayWindow.loadURL(`${resolveHtmlPath("/set-tab")}`);
-    }
-
-    isOverlayVisible = !isOverlayVisible;
-
-    if (isOverlayVisible) {
-      overlayWindow.show();
-      overlayWindow.focus();
-    } else {
-      overlayWindow.hide();
-    }
-  };
-
-  // Monitor Control key state using before-input-event on the switcher window
-  switcherWindow.webContents.on("before-input-event", (event, input) => {
-    if (input.key.toLowerCase() === "control") {
-      if (input.type === "keyDown") {
-        isControlPressed = true;
-      } else if (input.type === "keyUp") {
-        isControlPressed = false;
-        // Close switcher when Control is released
-        if (isSwitcherVisible) {
-          hideSwitcherAndSwitch();
-        }
-      }
-    } else if (
-      input.key.toLowerCase() === "tab" && input.type === "keyDown" &&
-      isControlPressed
-    ) {
-      // Handle Tab key press while Control is held down
-      event.preventDefault();
-      if (input.shift) {
-        // Control+Shift+Tab - navigate to previous tab
-        if (!isSwitcherVisible) {
-          showTabSwitcher();
-        } else {
-          navigateSwitcher("prev");
-        }
-      } else {
-        // Control+Tab - navigate to next tab
-        if (!isSwitcherVisible) {
-          showTabSwitcher();
-        } else {
-          navigateSwitcher("next");
-        }
-      }
-    }
-  });
-
-  // Remove the baseWindow.webContents monitoring - BaseWindow doesn't have webContents
-  // The existing monitors on tab views and sidebar should handle key events
-
-  // Monitor on the sidebar view as well
-  sidebarView.webContents.on("before-input-event", (event, input) => {
-    if (input.key.toLowerCase() === "control") {
-      if (input.type === "keyDown") {
-        isControlPressed = true;
-      } else if (input.type === "keyUp") {
-        isControlPressed = false;
-        // Close switcher when Control is released
-        if (isSwitcherVisible) {
-          hideSwitcherAndSwitch();
-        }
-      }
-    } else if (
-      input.key.toLowerCase() === "tab" && input.type === "keyDown" &&
-      isControlPressed
-    ) {
-      // Handle Tab key press while Control is held down
-      event.preventDefault();
-      if (input.shift) {
-        // Control+Shift+Tab - navigate to previous tab
-        if (!isSwitcherVisible) {
-          showTabSwitcher();
-        } else {
-          navigateSwitcher("prev");
-        }
-      } else {
-        // Control+Tab - navigate to next tab
-        if (!isSwitcherVisible) {
-          showTabSwitcher();
-        } else {
-          navigateSwitcher("next");
-        }
-      }
-    }
-  });
-
-  ipcMain.on("spotlight.toggle", async (event, arg) => {
-    await toggleOverlay(true);
-    event.reply("spotlight.toggle", arg);
-  });
-
-  // Function to hide overlay
-  const hideOverlay = () => {
-    if (!overlayWindow || !isOverlayVisible) return;
-
-    isOverlayVisible = false;
-    overlayWindow.hide();
-  };
-
-  // Handle overlay window events
-  overlayWindow.webContents.on("before-input-event", (event, input) => {
-    if (input.key === "Escape") {
-      hideOverlay();
-    } else if (input.key.toLowerCase() === "control") {
-      if (input.type === "keyDown") {
-        isControlPressed = true;
-      } else if (input.type === "keyUp") {
-        isControlPressed = false;
-        // Close switcher when Control is released
-        if (isSwitcherVisible) {
-          hideSwitcherAndSwitch();
-        }
-      }
-    }
-  });
-
-  overlayWindow.on("blur", () => {
-    hideOverlay();
-  });
-
-  // Add resize event handler
-  baseWindow.on("resize", () => {
-    if (!baseWindow || !sidebarView) return;
-
-    const [width, height] = baseWindow.getSize();
-    const sidebarWidth = getCurrentSidebarWidth();
-
-    // Update sidebar bounds
     sidebarView.setBounds({
       x: 0,
       y: 0,
-      width: sidebarWidth,
-      height: height,
+      width: INITIAL_SIDEBAR_WIDTH,
+      height: INITIAL_HEIGHT,
     });
 
-    // Update all tab view bounds
-    tabViews.forEach((tabView) => {
-      tabView.setBounds({
-        x: sidebarWidth,
+    sidebarView.webContents.loadURL(resolveHtmlPath("/"));
+    // Remove or comment out the automatic DevTools opening:
+    setTimeout(() => {
+      sidebarView?.webContents.openDevTools({
+        mode: "detach",
+      });
+    }, 1000);
+
+    console.log('Creating initial tab...');
+    // Create initial tab instead of single mainView
+    const { id: initialTabId } = createTabView("https://google.com");
+    switchToTab(initialTabId);
+    console.log('Initial tab created.');
+
+    // Create modal overlay window instead of WebContentsView
+    const overlayWidth = 600;
+    const overlayHeight = 328;
+
+    const spaces = DataStore.getSpaces();
+    if (spaces.length === 0) {
+      const defaultSpace = DataStore.addSpace({
+        name: "default",
+        color: "#3b82f6",
+      });
+      DataStore.setActiveSpaceId(defaultSpace.id);
+    }
+    const activeSpaceId = DataStore.getActiveSpaceId();
+    const activeSpace = spaces.find((space) => space.id === activeSpaceId);
+
+    console.log("activeSpace", activeSpace);
+
+    // const tabs = DataStore.getTabsForSpace(activeSpaceId);
+    // console.log("tabs", tabs);
+
+    // tabs.forEach((tab) => {
+    //   // TODO: support custom title
+    //   const { id, url, title, customTitle } = tab;
+    //   const tabView = createTabView(url);
+    //   tabViews.set(id, tabView.view);
+    //   baseWindow?.contentView.addChildView(tabView.view);
+    // });
+
+    // if (tabs.length === 0) {
+    //   // Create initial tab instead of single mainView
+    //   const { id: initialTabId } = createTabView(
+    //     "https://kzmo4l6a1wwtjqq6q0rw.lite.vusercontent.net/",
+    //   );
+    //   switchToTab(initialTabId);
+    // }
+
+    console.log('Creating overlay window...');
+    overlayWindow = new BrowserWindow({
+      parent: baseWindow,
+      modal: true,
+      show: false,
+      width: overlayWidth,
+      height: overlayHeight,
+      resizable: false,
+      frame: false,
+      transparent: true,
+      // TODO: add traffic lights
+      // titleBarStyle: 'hiddenInset',
+      // trafficLightPosition: {
+      //   x: 10,
+      //   y: 10,
+      // },
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        webviewTag: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        partition: `persist:${activeSpace?.id}`,
+        preload: app.isPackaged
+          ? path.join(__dirname, "preload.js")
+          : path.join(__dirname, "../../.erb/dll/preload.js"),
+      },
+    });
+    console.log('Overlay window created.');
+
+    // Create tab switcher window
+    const switcherWidth = 800;
+    const switcherHeight = 148;
+
+    console.log('Creating switcher window...');
+    switcherWindow = new BrowserWindow({
+      parent: baseWindow,
+      modal: false,
+      show: false,
+      width: switcherWidth,
+      height: switcherHeight,
+      resizable: false,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      webPreferences: {
+        preload: app.isPackaged
+          ? path.join(__dirname, "preload.js")
+          : path.join(__dirname, "../../.erb/dll/preload.js"),
+      },
+    });
+    console.log('Switcher window created.');
+
+    switcherWindow.loadURL(`${resolveHtmlPath("/switcher")}`);
+
+    baseWindow.contentView.addChildView(sidebarView);
+
+    // switcherWindow.show();
+
+    // Function to toggle overlay visibility
+    toggleOverlay = async (newTab: boolean) => {
+      if (!overlayWindow) return;
+      
+      if (newTab) {
+        await overlayWindow.loadURL(`${resolveHtmlPath("/change-tab")}`);
+      } else {
+        await overlayWindow.loadURL(`${resolveHtmlPath("/set-tab")}`);
+      }
+
+      isOverlayVisible = !isOverlayVisible;
+
+      if (isOverlayVisible) {
+        overlayWindow.show();
+        overlayWindow.focus();
+      } else {
+        overlayWindow.hide();
+      }
+    };
+
+    // Monitor Control key state using before-input-event on the switcher window
+    switcherWindow.webContents.on("before-input-event", (event, input) => {
+      if (input.key.toLowerCase() === "control") {
+        if (input.type === "keyDown") {
+          isControlPressed = true;
+        } else if (input.type === "keyUp") {
+          isControlPressed = false;
+          // Close switcher when Control is released
+          if (isSwitcherVisible) {
+            hideSwitcherAndSwitch();
+          }
+        }
+      } else if (
+        input.key.toLowerCase() === "tab" && input.type === "keyDown" &&
+        isControlPressed
+      ) {
+        // Handle Tab key press while Control is held down
+        event.preventDefault();
+        if (input.shift) {
+          // Control+Shift+Tab - navigate to previous tab
+          if (!isSwitcherVisible) {
+            showTabSwitcher();
+          } else {
+            navigateSwitcher("prev");
+          }
+        } else {
+          // Control+Tab - navigate to next tab
+          if (!isSwitcherVisible) {
+            showTabSwitcher();
+          } else {
+            navigateSwitcher("next");
+          }
+        }
+      }
+    });
+
+    // Remove the baseWindow.webContents monitoring - BaseWindow doesn't have webContents
+    // The existing monitors on tab views and sidebar should handle key events
+
+    // Monitor on the sidebar view as well
+    sidebarView.webContents.on("before-input-event", (event, input) => {
+      if (input.key.toLowerCase() === "control") {
+        if (input.type === "keyDown") {
+          isControlPressed = true;
+        } else if (input.type === "keyUp") {
+          isControlPressed = false;
+          // Close switcher when Control is released
+          if (isSwitcherVisible) {
+            hideSwitcherAndSwitch();
+          }
+        }
+      } else if (
+        input.key.toLowerCase() === "tab" && input.type === "keyDown" &&
+        isControlPressed
+      ) {
+        // Handle Tab key press while Control is held down
+        event.preventDefault();
+        if (input.shift) {
+          // Control+Shift+Tab - navigate to previous tab
+          if (!isSwitcherVisible) {
+            showTabSwitcher();
+          } else {
+            navigateSwitcher("prev");
+          }
+        } else {
+          // Control+Tab - navigate to next tab
+          if (!isSwitcherVisible) {
+            showTabSwitcher();
+          } else {
+            navigateSwitcher("next");
+          }
+        }
+      }
+    });
+
+    ipcMain.on("spotlight.toggle", async (event, arg) => {
+      await toggleOverlay(true);
+      event.reply("spotlight.toggle", arg);
+    });
+
+    // Function to hide overlay
+    const hideOverlay = () => {
+      if (!overlayWindow || !isOverlayVisible) return;
+
+      isOverlayVisible = false;
+      overlayWindow.hide();
+    };
+
+    // Handle overlay window events
+    overlayWindow.webContents.on("before-input-event", (event, input) => {
+      if (input.key === "Escape") {
+        hideOverlay();
+      } else if (input.key.toLowerCase() === "control") {
+        if (input.type === "keyDown") {
+          isControlPressed = true;
+        } else if (input.type === "keyUp") {
+          isControlPressed = false;
+          // Close switcher when Control is released
+          if (isSwitcherVisible) {
+            hideSwitcherAndSwitch();
+          }
+        }
+      }
+    });
+
+    overlayWindow.on("blur", () => {
+      hideOverlay();
+    });
+
+    // Add resize event handler
+    baseWindow.on("resize", () => {
+      if (!baseWindow || !sidebarView) return;
+
+      const [width, height] = baseWindow.getSize();
+      const sidebarWidth = getCurrentSidebarWidth();
+
+      // Update sidebar bounds
+      sidebarView.setBounds({
+        x: 0,
         y: 0,
-        width: width - sidebarWidth,
+        width: sidebarWidth,
         height: height,
       });
+
+      // Update all tab view bounds
+      tabViews.forEach((tabView) => {
+        tabView.setBounds({
+          x: sidebarWidth,
+          y: 0,
+          width: width - sidebarWidth,
+          height: height,
+        });
+      });
+
+      // Modal window will automatically center itself relative to parent
     });
 
-    // Modal window will automatically center itself relative to parent
-  });
+    setTimeout(() => {
+      baseWindow?.show();
+    }, 1000);
 
-  setTimeout(() => {
-    baseWindow?.show();
-  }, 1000);
+    // Remove this if your app does not use auto updates
+    // eslint-disable-next-line
+    new AppUpdater();
 
-  // Remove this if your app does not use auto updates
-  // eslint-disable-next-line
-  new AppUpdater();
+    // Create find overlay window
+    const findWidth = 300;
+    const findHeight = 50;
 
-  // Create find overlay window
-  const findWidth = 300;
-  const findHeight = 50;
+    console.log('Creating find window...');
+    findWindow = new BrowserWindow({
+      parent: baseWindow,
+      modal: false,
+      show: false,
+      width: findWidth,
+      height: findHeight,
+      resizable: false,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      webPreferences: {
+        preload: app.isPackaged
+          ? path.join(__dirname, "preload.js")
+          : path.join(__dirname, "../../.erb/dll/preload.js"),
+      },
+    });
+    console.log('Find window created.');
 
-  findWindow = new BrowserWindow({
-    parent: baseWindow,
-    modal: false,
-    show: false,
-    width: findWidth,
-    height: findHeight,
-    resizable: false,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    webPreferences: {
-      preload: app.isPackaged
-        ? path.join(__dirname, "preload.js")
-        : path.join(__dirname, "../../.erb/dll/preload.js"),
-    },
-  });
+    findWindow.loadURL(`${resolveHtmlPath("/find-in-page")}`);
 
-  findWindow.loadURL(`${resolveHtmlPath("/find-in-page")}`);
+    // Function to toggle find overlay visibility
+    toggleFind = () => {
+      if (!findWindow) return;
 
-  // Function to toggle find overlay visibility
-  toggleFind = () => {
-    if (!findWindow) return;
+      isFindVisible = !isFindVisible;
 
-    isFindVisible = !isFindVisible;
-
-    if (isFindVisible) {
-      // Position the find window at the top-right of the main window
-      if (baseWindow) {
-        const [mainX, mainY] = baseWindow.getPosition();
-        const [mainWidth] = baseWindow.getSize();
-        findWindow.setPosition(mainX + mainWidth - findWidth - 20, mainY + 60);
-      }
-      findWindow.show();
-      findWindow.focus();
-      setTimeout(() => {
-        findWindow?.webContents.openDevTools({
-          mode: "detach",
-        });
-      }, 1000);
-    } else {
-      findWindow.hide();
-      // Clear any active find when hiding
-      const activeTabView = getActiveTabView();
-      if (activeTabView) {
-        activeTabView.webContents.stopFindInPage("clearSelection");
-      }
-    }
-  };
-
-  // Handle find window events
-  findWindow.webContents.on("before-input-event", (event, input) => {
-    if (input.key === "Escape") {
       if (isFindVisible) {
-        isFindVisible = false;
-        findWindow?.hide();
-        // Clear any active find
+        // Position the find window at the top-right of the main window
+        if (baseWindow) {
+          const [mainX, mainY] = baseWindow.getPosition();
+          const [mainWidth] = baseWindow.getSize();
+          findWindow.setPosition(mainX + mainWidth - findWidth - 20, mainY + 60);
+        }
+        findWindow.show();
+        findWindow.focus();
+        setTimeout(() => {
+          findWindow?.webContents.openDevTools({
+            mode: "detach",
+          });
+        }, 1000);
+      } else {
+        findWindow.hide();
+        // Clear any active find when hiding
         const activeTabView = getActiveTabView();
         if (activeTabView) {
           activeTabView.webContents.stopFindInPage("clearSelection");
         }
       }
-    }
-  });
+    };
 
-  findWindow.on("blur", () => {
-    // Don't auto-hide find window like overlay - let user keep it open
-  });
+    // Handle find window events
+    findWindow.webContents.on("before-input-event", (event, input) => {
+      if (input.key === "Escape") {
+        if (isFindVisible) {
+          isFindVisible = false;
+          findWindow?.hide();
+          // Clear any active find
+          const activeTabView = getActiveTabView();
+          if (activeTabView) {
+            activeTabView.webContents.stopFindInPage("clearSelection");
+          }
+        }
+      }
+    });
+
+    findWindow.on("blur", () => {
+      // Don't auto-hide find window like overlay - let user keep it open
+    });
+    console.log('createWindow finished');
+  } catch (error) {
+    console.error('Error in createWindow:', error);
+    app.quit();
+  }
 };
 
 app.on("window-all-closed", () => {
