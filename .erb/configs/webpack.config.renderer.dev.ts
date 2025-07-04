@@ -81,8 +81,14 @@ const configuration: webpack.Configuration = {
       },
       {
         test: /\.s?css$/,
+        exclude: [/\.module\.s?(c|a)ss$/, /tw-animate-css/],
         use: ['style-loader', 'css-loader', 'postcss-loader', 'sass-loader'],
-        exclude: /\.module\.s?(c|a)ss$/,
+      },
+      {
+        // Only for tw-animate-css
+        test: /\.css$/,
+        include: /tw-animate-css/,
+        use: ['style-loader', 'css-loader'], // no sass-loader, postcss-loader
       },
       {
         test: /\.(woff|woff2|eot|ttf|otf)$/i,
